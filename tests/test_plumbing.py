@@ -197,6 +197,63 @@ def test_parser_dirty_outputs():
     pass
 
 
+def test_eviction():
+    # 逐出：连调5次工具后，只保留最近3条工具结果原文，更早的为桩
+    script = [
+        {"thought": "查", "action": {"tool": "get_kline",
+                                     "args": {"code": "600519", "days": 60}}},
+    ] * 5 + [{"thought": "完", "action": {"done": True, "answer": "FINAL"}}]
+    mock = MockLLM(script)
+    agent = Agent(llm=mock, max_steps=10)
+    run = agent.run("研究 600519", log_dir="runs/tests")
+    assert run.stopped == "done" and run.answer == "FINAL"
+    tool_msgs = [m for m in mock.messages_seen
+                 if m["role"] == "user" and m["content"].startswith("[工具 ")]
+    full = [m for m in tool_msgs if "已折叠省略" not in m["content"]]
+    stubs = [m for m in tool_msgs if "已折叠省略" in m["content"]]
+    assert len(full) == 3, "应保留3条原文，实际%d" % len(full)
+    assert len(stubs) == 2, "应有2条桩，实际%d" % len(stubs)
+    # 桩必须明示重新调用指引（防agent误以为数据还在）
+    assert all("重新调用" in m["content"] for m in stubs)
+    # 上下文记账进日志
+    log_text = Path(run.log_path).read_text(encoding="utf-8")
+    assert '"type": "context"' in log_text and '"chars"' in log_text
+    print("eviction OK（5条工具结果->3原文+2桩，记账落日志）")
+
+
+def test_eviction_size_effect():
+    # 压缩效果：16步任务终局上下文须显著小于无逐出基线(36175字符)
+    import json as _j
+
+    class LoopToolMock(object):
+        model = "mock"
+        total_tokens = 0
+
+        def __init__(self, n_tools):
+            self.n_tools = n_tools
+            self.i = 0
+            self.messages_seen = None
+
+        def decide(self, messages):
+            self.messages_seen = list(messages)
+            if self.i < self.n_tools:
+                tool = "get_kline" if self.i % 2 == 0 else "get_fund_flow"
+                obj = {"thought": "查", "action": {
+                    "tool": tool, "args": {"code": "600519", "days": 60}}}
+            else:
+                obj = {"thought": "完", "action": {"done": True, "answer": "x" * 300}}
+            self.i += 1
+            return obj, _j.dumps(obj, ensure_ascii=False)
+
+    mock = LoopToolMock(15)
+    agent = Agent(llm=mock, max_steps=16)
+    run = agent.run("研究 600519", log_dir="runs/tests")
+    assert run.stopped == "done"
+    total = sum(len(m["content"]) for m in mock.messages_seen)
+    assert total < 20000, "16步终局上下文应<20K（基线36K），实际%d" % total
+    print("eviction_size_effect OK（16步终局 %d 字符，基线36175）" % total)
+
+
 if __name__ == "__main__":
     test_happy_path()
     test_max_steps_forced_final()
@@ -205,4 +262,6 @@ if __name__ == "__main__":
     test_parse_failures_circuit_breaker()
     test_llm_error_recovery()
     test_llm_error_circuit_breaker()
+    test_eviction()
+    test_eviction_size_effect()
     print("PLUMBING OK")

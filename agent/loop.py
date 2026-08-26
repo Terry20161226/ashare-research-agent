@@ -57,12 +57,35 @@ class AgentRun(object):
     """一次 run 的结果。answer 为 None = 未产出（查 log_path）。"""
 
 
+def _context_chars(messages):
+    """当前上下文总字符数（system+历史+工具结果）。"""
+    return sum(len(m.get("content", "")) for m in messages)
+
+
+def _evict_old_tool_results(messages, keep=3):
+    """上下文逐出：工具结果只保留最近 keep 条原文，更早的折叠为一行桩。
+
+    权衡：旧数据原文驻留换取注意力聚焦与负载稳定（实测16步任务工具
+    结果占上下文86%）。桩明示「如需引用请重新调用」，agent 不会误以为
+    数据还在。forced_final 收尾时已拿到 answer 所需结论，逐出无损。
+    """
+    idx = [i for i, m in enumerate(messages)
+           if m.get("role") == "user"
+           and m.get("content", "").startswith("[工具 ")
+           and "执行结果]" in m.get("content", "")[:30]]
+    for i in idx[:-keep] if keep > 0 else idx:
+        head = messages[i]["content"].split("\n", 1)
+        stub = head[0] + "（已折叠省略——如需引用其中数据，请重新调用该工具）"
+        messages[i]["content"] = stub
+
+
 class Agent:
-    def __init__(self, llm=None, max_steps=15, verbose=False):
+    def __init__(self, llm=None, max_steps=15, verbose=False, evict_keep=3):
         self.llm = llm or LLMClient()
         self.max_steps = max_steps
         self.verbose = verbose
         self.retry_sleep = 3  # LLM通道故障重试间隔（测试置0）
+        self.evict_keep = evict_keep  # 工具结果原文保留最近N条，更早的折叠为桩
         self._system = self._build_system()
         # prompt版本指纹：行为突变时先对hash，再查是谁改了提示词
         self.prompt_hash = hashlib.md5(self._system.encode()).hexdigest()[:10]
@@ -94,6 +117,9 @@ class Agent:
 
         for step in range(1, self.max_steps + 1):
             # ---- 1. LLM 决策 ----
+            # 上下文记账：发给LLM的真实负载（逐出机制的效果可从日志观测）
+            log.write(step, "context", {"chars": _context_chars(messages),
+                                        "msgs": len(messages)})
             try:
                 decision, raw = self.llm.decide(messages)
             except DecisionParseError as e:
@@ -140,8 +166,10 @@ class Agent:
                               TOOL_SPECS.get(tool, {}).get("limit", 2000))
             messages.append({"role": "user",
                              "content": "[工具 %s 执行结果]\n%s" % (tool, result)})
+            _evict_old_tool_results(messages, keep=self.evict_keep)
             log.write(step, "tool_result",
                       {"tool": tool, "chars": len(result),
+                       "context_chars": _context_chars(messages),
                        "preview": result[:300]})
             if self.verbose:
                 print("  step%02d %-16s %s" % (step, tool, thought[:50]))
