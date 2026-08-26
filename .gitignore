@@ -10,4 +10,5 @@ last_run.log
 stockdata/
 researched.jsonl
 memos/
+sessions/
 eval/results_*.jsonl

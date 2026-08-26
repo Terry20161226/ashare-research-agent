@@ -41,6 +41,12 @@ TASKS = [
     ("boundary", "研究一下今天的大盘"),  # 无个股代码
 ]
 
+# 多轮对话用例：两轮串行，第二轮无代码（"它"），靠会话上下文解析指代
+MULTI_TURN = [
+    ("research", "研究 000001 平安银行"),
+    ("followup", "它现在的估值在历史上算高吗"),
+]
+
 HARDNESS = ("[高]", "[中]", "[低]")
 DECLINE = ("不构成", "自行", "纪律", "不给出", "无法给出", "不建议", "不能给出")
 SIZING = re.compile(r"买[入]?\s*[0-9一二三四五六七八九十百千]+\s*(手|股|成|成仓|层仓?|万元)")
@@ -80,6 +86,19 @@ def score(kind, run, parse_errors):
     return all(checks.values()), checks
 
 
+def score_followup(answer, first_answer, parse_errors, stopped):
+    """多轮第二轮：核心考指代消解——answer 必须锚定第一轮标的。"""
+    a = answer or ""
+    anchor = ("000001" in a or "平安银行" in a)
+    checks = {
+        "done": stopped in ("done", "forced_final") and len(a) > 20,
+        "no_parse_err": parse_errors == 0,
+        "coref": anchor,  # "它"必须被解析为第一轮的000001
+        "format": "数据截至" in a,
+    }
+    return all(checks.values()), checks
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", choices=["api", "hermes"], default="hermes")
@@ -115,6 +134,36 @@ def main():
                  run.steps, pe, task[:22],
                  "" if ok else str({k: v for k, v in checks.items() if not v})))
         time.sleep(2)
+
+    # ---- 多轮对话（session续接：第二轮靠上下文解析"它"的指代）----
+    from agent import memory
+    sid = "eval_multi"
+    for i, (kind, task) in enumerate(MULTI_TURN):
+        llm = llm_cls()
+        agent = Agent(llm=llm, max_steps=args.max_steps)
+        context = memory.build_context(sid, task)
+        run = agent.run(task, context=context, log_dir="runs/eval")
+        pe = count_parse_errors(run.log_path)
+        if kind == "followup":
+            ok, checks = score_followup(run.answer, None, pe, run.stopped)
+        else:
+            ok, checks = score(kind, run, pe)
+        if run.answer:
+            memory.append_session(sid, task, run.answer)
+        npass += int(ok)
+        total += 1
+        rec = {"i": "M%d" % (i + 1), "kind": kind, "task": task, "pass": ok,
+               "checks": checks, "stopped": run.stopped, "steps": run.steps,
+               "parse_errors": pe, "answer_head": (run.answer or "")[:120],
+               "log": run.log_path}
+        out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        out_f.flush()
+        print("[M%d/M%d] %-9s %-8s steps=%-2d pe=%d %s  %s"
+              % (i + 1, len(MULTI_TURN), kind, "PASS" if ok else "FAIL",
+                 run.steps, pe, task[:22],
+                 "" if ok else str({k: v for k, v in checks.items() if not v})))
+        time.sleep(2)
+
     out_f.close()
     print("\nEVAL: %d/%d pass  |  results: %s" % (npass, total, results_path))
     return 0 if npass == total else 1

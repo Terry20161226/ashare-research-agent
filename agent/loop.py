@@ -71,17 +71,23 @@ class Agent:
         tpl = PROMPT_PATH.read_text(encoding="utf-8")
         return tpl.replace("{{TOOLS}}", tool_prompt())
 
-    def run(self, task, log_dir=None):
+    def run(self, task, log_dir=None, context=None):
+        """执行一次任务。context: 可选上下文块（会话历史/历史备忘录），
+        由 agent/memory.py 组装——主循环保持无状态，记忆是外围层。"""
         run = AgentRun()
         run.task = task
         run.model = getattr(self.llm, "model", "mock")
+        user_content = "任务：" + task
+        if context:
+            user_content = context + "\n\n" + user_content
         messages = [
             {"role": "system", "content": self._system},
-            {"role": "user", "content": "任务：" + task},
+            {"role": "user", "content": user_content},
         ]
         log = RunLog(log_dir, {
             "task": task, "model": run.model, "prompt_hash": self.prompt_hash,
-            "max_steps": self.max_steps})
+            "max_steps": self.max_steps,
+            "context_chars": len(context or "")})
         parse_fails = 0
         llm_errors = 0
         stopped, answer, step = "max_steps", None, 0
