@@ -11,6 +11,7 @@
 """
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -32,8 +33,10 @@ class RunLog:
     def __init__(self, log_dir, meta):
         d = Path(log_dir) if log_dir else Path("runs")
         d.mkdir(parents=True, exist_ok=True)
+        # 文件名带pid：同秒多进程并行运行（如测试与真实任务同秒启动）不会
+        # 以append模式写进同一个文件
         ts = time.strftime("%Y%m%d_%H%M%S")
-        self.path = d / ("run_%s.jsonl" % ts)
+        self.path = d / ("run_%s_%d.jsonl" % (ts, os.getpid()))
         self._f = open(self.path, "a", encoding="utf-8")
         self.write(0, "meta", meta)
 

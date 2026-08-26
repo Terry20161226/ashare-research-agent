@@ -102,9 +102,39 @@ def _extract_first_json(text):
     return None
 
 
+def _autoclose_loads(fragment):
+    """兜底：内容完整但LLM漏数嵌套右括号（生产事故形态4）。
+    状态机扫到结尾：不在字符串内且深度>0 -> 补齐缺失的}再loads（无损恢复）；
+    在字符串中途截断（内容真被切断）-> 返回None走重试路径，不产出半截答案。"""
+    depth, in_str, esc = 0, False, False
+    for c in fragment:
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+    if in_str or depth <= 0:
+        return None
+    try:
+        obj = json.loads(fragment + "}" * depth, strict=False)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
 def parse_decision_json(raw):
     """宽容解析：剥markdown围栏 -> 首个配平JSON对象(strict=False容忍
-    字符串内真实换行) -> 兜底首尾大括号。LLM输出脏是常态，解析器负责兜住。"""
+    字符串内真实换行) -> 兜底首尾大括号 -> 终极兜底补齐缺失右括号。
+    LLM输出脏是常态，解析器负责兜住。"""
     text = (raw or "").strip()
     m = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
     if m:
@@ -120,10 +150,14 @@ def parse_decision_json(raw):
     s, e = text.find("{"), text.rfind("}")
     if s == -1 or e <= s:
         raise DecisionParseError(raw)
+    frag = text[s:e + 1]
     try:
-        obj = json.loads(text[s:e + 1], strict=False)
+        obj = json.loads(frag, strict=False)
+        if isinstance(obj, dict):
+            return obj
     except json.JSONDecodeError:
-        raise DecisionParseError(raw)
-    if not isinstance(obj, dict):
-        raise DecisionParseError(raw)
-    return obj
+        pass
+    obj = _autoclose_loads(frag)
+    if obj is not None:
+        return obj
+    raise DecisionParseError(raw)

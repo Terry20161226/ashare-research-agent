@@ -219,6 +219,26 @@ def test_parser_dirty_outputs():
     print("parser_dirty_outputs OK（换行/回声/围栏三种脏形态全兜住）")
 
 
+def test_parser_missing_braces():
+    # 形态4：内容完整但LLM漏数嵌套右括号（生产run5事故）——补齐后无损恢复
+    from agent.llm import DecisionParseError, parse_decision_json
+
+    raw4 = ('{"thought": "成稿", "action": {"done": true, '
+            '"answer": "完整内容，结尾自然。数据截至2026-08-26。"}')
+    obj = parse_decision_json(raw4)
+    assert obj["action"]["done"] is True
+    assert obj["action"]["answer"].endswith("数据截至2026-08-26。")
+
+    # 形态5：字符串中途截断（内容真被切断）——不救，抛错走重试路径
+    raw5 = '{"thought": "x", "action": {"done": true, "answer": "内容被截'
+    try:
+        parse_decision_json(raw5)
+        raise AssertionError("中途截断应抛DecisionParseError")
+    except DecisionParseError:
+        pass
+    print("parser_missing_braces OK（漏括号无损恢复/中途截断走重试）")
+
+
 if __name__ == "__main__":
     test_happy_path()
     test_max_steps_forced_final()
@@ -228,4 +248,5 @@ if __name__ == "__main__":
     test_llm_error_recovery()
     test_llm_error_circuit_breaker()
     test_parser_dirty_outputs()
+    test_parser_missing_braces()
     print("PLUMBING OK")
