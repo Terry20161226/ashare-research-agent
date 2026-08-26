@@ -67,7 +67,7 @@ prompts/
 tests/                工具实测 + mock 全链路（不需要 API key）
 eval/                 评估集：10任务规则化评分（改提示词前后必跑）
 deploy/               可选部署样例（ECS + 飞书投递 + 研究队列联动）
-runs/                 每次运行的 jsonl 日志（自动生成，gitignore）
+runs/                 运行日志：真实任务在 runs/，测试在 runs/tests/，评估在 runs/eval/
 ```
 
 ## 设计决策（为什么这样写）

@@ -69,7 +69,7 @@ class LoopMock(object):
 def test_happy_path():
     mock = MockLLM(GOOD_SCRIPT)
     agent = Agent(llm=mock, max_steps=10)
-    run = agent.run("研究 600519 贵州茅台", log_dir=None)
+    run = agent.run("研究 600519 贵州茅台", log_dir="runs/tests")
     assert run.stopped == "done", run.stopped
     assert "MOCK" in run.answer
     assert run.steps == 4, run.steps
@@ -90,7 +90,7 @@ def test_max_steps_forced_final():
     # 前5次决策永远要查数据 -> 5步耗尽 -> forced_final 一次无工具收尾
     mock = LoopMock(n_tools=5)
     agent = Agent(llm=mock, max_steps=5)
-    run = agent.run("研究 600519", log_dir=None)
+    run = agent.run("研究 600519", log_dir="runs/tests")
     assert run.steps == 5, run.steps
     assert run.stopped == "forced_final", run.stopped
     assert run.answer == "FORCED最终稿"
@@ -105,7 +105,7 @@ def test_max_steps_runaway():
     # 收尾机会仍然不听话（永远要查）：answer 为 None，日志可查，不崩
     mock = LoopMock(n_tools=999)
     agent = Agent(llm=mock, max_steps=5)
-    run = agent.run("研究 600519", log_dir=None)
+    run = agent.run("研究 600519", log_dir="runs/tests")
     assert run.stopped == "max_steps", run.stopped
     assert run.answer is None
     assert Path(run.log_path).exists()
@@ -125,7 +125,7 @@ def test_parse_error_recovery():
 
     mock = FlakyMock(GOOD_SCRIPT)
     agent = Agent(llm=mock, max_steps=10)
-    run = agent.run("研究 600519", log_dir=None)
+    run = agent.run("研究 600519", log_dir="runs/tests")
     assert run.stopped == "done", run.stopped
     assert run.answer and "MOCK" in run.answer
     print("parse_error_recovery OK  steps=%d" % run.steps)
@@ -143,7 +143,7 @@ def test_parse_failures_circuit_breaker():
             raise DecisionParseError("垃圾输出" * 100)
 
     agent = Agent(llm=GarbageMock(), max_steps=10)
-    run = agent.run("研究 600519", log_dir=None)
+    run = agent.run("研究 600519", log_dir="runs/tests")
     assert run.stopped == "parse_failures", run.stopped
     assert run.answer is None
     assert run.steps <= 3, "熔断应在3步内生效，实际%d" % run.steps
@@ -167,7 +167,7 @@ def test_llm_error_recovery():
     mock = DownThenUp(GOOD_SCRIPT, n_down=2)
     agent = Agent(llm=mock, max_steps=10)
     agent.retry_sleep = 0
-    run = agent.run("研究 600519", log_dir=None)
+    run = agent.run("研究 600519", log_dir="runs/tests")
     assert run.stopped == "done", run.stopped
     assert run.steps == 4, run.steps  # 2次错误+2次正常，预算内消化
     print("llm_error_recovery OK  steps=%d" % run.steps)
@@ -184,7 +184,7 @@ def test_llm_error_circuit_breaker():
 
     agent = Agent(llm=DeadLLM(), max_steps=10)
     agent.retry_sleep = 0
-    run = agent.run("研究 600519", log_dir=None)
+    run = agent.run("研究 600519", log_dir="runs/tests")
     assert run.stopped == "llm_error", run.stopped
     assert run.answer is None
     assert run.steps <= 3, "熔断应在3步内生效，实际%d" % run.steps
