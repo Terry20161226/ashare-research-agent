@@ -14,6 +14,8 @@ CASES = [
     ("get_quote", {"code": "600519"}),
     ("get_kline", {"code": "600519", "days": 10}),
     ("get_fund_flow", {"code": "600519", "days": 5}),
+    ("get_finance", {"code": "600519"}),
+    ("get_finance", {"code": "999999"}),       # 不存在 -> 结构化错误
     # 错误路径也要测：坏代码、不存在的工具
     ("get_quote", {"code": "60051"}),          # 格式错 -> 结构化错误
     ("get_kline", {"code": "600519"}),          # 缺 days -> 应该用默认值成功
@@ -39,6 +41,13 @@ def main():
     bad = execute("get_quote", {"code": "abc"})
     assert "失败" in bad or "错误" in bad, bad
     assert "建议" in bad, "错误信息必须包含下一步建议，当前: %r" % bad
+    fin = execute("get_finance", {"code": "600519"})
+    assert "报告期" in fin and "营收" in fin, fin[:200]
+    fin_bad = execute("get_finance", {"code": "999999"})
+    assert "失败" in fin_bad or "错误" in fin_bad, fin_bad[:200]
+    # 资金流：当前接口间歇性只回当日，但必须正常返回且带数据来源标注
+    ff = execute("get_fund_flow", {"code": "600519", "days": 5})
+    assert "主力净流入" in ff and "数据来源" in ff, ff[:200]
     print("TOOLS OK")
 
 

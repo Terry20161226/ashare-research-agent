@@ -147,10 +147,12 @@ def parse_decision_json(raw):
                 return obj
         except json.JSONDecodeError:
             pass
-    s, e = text.find("{"), text.rfind("}")
-    if s == -1 or e <= s:
+    s = text.find("{")
+    if s == -1:
         raise DecisionParseError(raw)
-    frag = text[s:e + 1]
+    e = text.rfind("}")
+    # 注意：一个右括号都没有（漏两层以上）时 frag 取到串尾，仍交给 autoclose
+    frag = text[s:e + 1] if e > s else text[s:]
     try:
         obj = json.loads(frag, strict=False)
         if isinstance(obj, dict):

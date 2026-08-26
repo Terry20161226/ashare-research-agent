@@ -10,7 +10,7 @@
 """
 import traceback
 
-from tools import fflow, kline, quote
+from tools import fflow, finance, kline, quote
 
 TOOL_SPECS = {
     "get_quote": {
@@ -30,11 +30,19 @@ TOOL_SPECS = {
     },
     "get_fund_flow": {
         "func": fflow.get_fund_flow,
-        "desc": "获取个股主力资金流（日频历史）：每日主力净流入、超大单、大单金额。"
-                "用于判断近期主力资金动向。接口偶发不可用，失败时返回错误提示。",
+        "desc": "获取个股主力资金流（日频）：每日主力净流入、超大单、大单金额。"
+                "用于判断近期主力资金动向。接口间歇性仅返回当日，历史由本地缓存"
+                "每日累积；输出末行标注数据来源。",
         "args": {"code": "股票代码"},
         "optional_args": {"days": "取最近N个交易日，默认20，范围5~60"},
         "limit": 3000,
+    },
+    "get_finance": {
+        "func": finance.get_finance,
+        "desc": "获取财务摘要：最近4个报告期（季报/年报，倒序）的营业收入、"
+                "归母净利润及同比增速。用于基本面画像与成长性判断。",
+        "args": {"code": "股票代码"},
+        "limit": 1200,
     },
 }
 

@@ -7,3 +7,6 @@ __pycache__/
 *.log
 last_run.log
 .idea/
+stockdata/
+researched.jsonl
+eval/results_*.jsonl

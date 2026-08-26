@@ -1,5 +1,7 @@
 # A股研究员 Agent
 
+[![CI](https://github.com/Terry20161226/ashare-research-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Terry20161226/ashare-research-agent/actions/workflows/ci.yml)
+
 一个零框架、从零手写的 A 股个股研究智能体。**LLM 在循环里，自主决定下一步调哪个工具**：
 给它一个任务或问题，它自己完成"取数 → 分析 → 成稿"，全程只引用工具返回的真实数据。
 
@@ -20,7 +22,8 @@ python3 main.py "分析下 002017 后续最有可能的走势"
 （[高]=数据直接支持 / [中]=数据暗示 / [低]=推断），数据缺口如实说明，绝不编造数字。
 
 内置工具（全部只读）：腾讯实时行情快照（现价/估值/市值/换手）、腾讯日K线
-（前复权，10~250日）、东财主力资金流（日频，主站+延迟站自动回退）。
+（前复权，10~250日）、东财主力资金流（三级host回退 + 本地自累积缓存）、
+东财财务摘要（最近4个报告期营收/归母净利及同比）。
 
 ## 快速开始
 
@@ -55,12 +58,15 @@ tools/
   __init__.py         ★ 工具注册表：描述即提示词、错误结构化返回
   quote.py            腾讯实时行情（GBK编码）
   kline.py            腾讯日K线（前复权）
-  fflow.py            东财主力资金流（push2→push2delay 回退链）
+  fflow.py            东财主力资金流（push2→push2his→push2delay 回退链
+                      + stockdata/ 自累积缓存：接口间歇性只回当日时历史靠每日运行累积）
+  finance.py          东财财务摘要（datacenter，最近4个报告期）
 prompts/
   researcher.txt      system prompt（落文件；{{TOOLS}} 由注册表自动注入）
 tests/                工具实测 + mock 全链路（不需要 API key）
+eval/                 评估集：10任务规则化评分（改提示词前后必跑）
+deploy/               可选部署样例（ECS + 飞书投递 + 研究队列联动）
 runs/                 每次运行的 jsonl 日志（自动生成，gitignore）
-deploy/               可选部署样例（ECS + 飞书投递）
 ```
 
 ## 设计决策（为什么这样写）
@@ -94,6 +100,19 @@ deploy/               可选部署样例（ECS + 飞书投递）
    结果进入上下文的截断上限。
 3. `python3 tests/test_tools.py` 回归，再跑一次真实任务看路由是否正确。
 
+## 评估集（改提示词/解析器/工具前后必跑）
+
+"改提示词等于改代码"——这个仓库的回归闸门分两层：
+
+```bash
+python3 tests/test_parser.py       # 离线：解析器五种脏输出形态（CI自动跑）
+python3 eval/run_eval.py --llm hermes   # 全链路：10任务×规则评分（需LLM通道）
+```
+
+评估集覆盖四类任务：研究（3）、问句（3）、红线（1，要求拒绝仓位指令）、
+边界（3，坏代码/不存在代码/无代码任务）。评分项：正常收尾、零 parse_error、
+输出纪律（数据截至行、硬度标注、拒绝买入指令）。结果落盘 `eval/results_*.jsonl`。
+
 ## 运行日志与排障
 
 ```bash
@@ -118,6 +137,10 @@ cp deploy/agent-research.sh ~/.hermes/scripts/
 hermes cron create '30 16 * * 1-5' --name agent-research \
   --script agent-research.sh --no-agent --deliver feishu:<chat_id>
 ```
+
+可选联动 `deploy/update_task.py`：从外部交易系统的研究队列文件（只读）
+自动挑选当日研究对象写入 TASK.txt（带5天冷却去重；TASK.txt 首行加 `!`
+前缀可手动覆盖），队列缺失或格式不符时自动跳过——集成层永不阻断主流程。
 
 ## 红线
 

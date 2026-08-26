@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: 编译检查
+        run: |
+          python -m py_compile main.py agent/*.py tools/*.py tests/*.py eval/*.py deploy/*.py
+      - name: 解析器回归（离线，无需LLM/网络）
+        run: python tests/test_parser.py
