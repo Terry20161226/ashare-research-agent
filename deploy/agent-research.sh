@@ -17,6 +17,6 @@ fi
 for task in "${TASKS[@]}"; do
   [ -z "$task" ] && continue
   echo "===== 研究任务：$task ====="
-  python3 main.py "$task" --llm hermes --verbose --max-steps 12
+  python3 main.py "$task" --llm hermes --verbose --max-steps 12 --save-memo
   echo
 done

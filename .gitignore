@@ -9,4 +9,5 @@ last_run.log
 .idea/
 stockdata/
 researched.jsonl
+memos/
 eval/results_*.jsonl

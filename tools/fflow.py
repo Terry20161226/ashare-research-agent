@@ -12,6 +12,7 @@
 输出末行标注数据来源，上层引用时如实转述（研究草稿的诚实纪律）。
 """
 import json
+import os
 from pathlib import Path
 
 import requests
@@ -37,8 +38,12 @@ def _load_cache():
 def _save_cache(cache):
     try:
         CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CACHE_PATH.write_text(
+        # 原子写：tmp+rename。防多进程并发（如评估与定时研究重叠）
+        # 直接写同一路径造成交错损坏——缓存损坏会让累积历史清零
+        tmp = CACHE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(
             json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, CACHE_PATH)
     except Exception:
         pass  # 缓存读写失败不影响主流程
 

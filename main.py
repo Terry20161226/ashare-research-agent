@@ -8,10 +8,33 @@
     python main.py "研究 000001 平安银行" --verbose --max-steps 10
 """
 import argparse
+import re
+import time
+from pathlib import Path
 
 from agent.llm import LLMClient
 from agent.llm_hermes import HermesLLM
 from agent.loop import Agent
+
+
+def save_memo(task, run):
+    """答案归档 memos/YYYYMMDD_代码.md（同日同代码覆盖，最新为准）。
+
+    用途：交易候选的自动预研备忘录库——队列候选升级窗口确认时，
+    历史研究草稿可直接回溯（文件可grep，优于聊天记录流）。
+    """
+    m = re.search(r"\b\d{6}\b", task)
+    tag = m.group(0) if m else "misc"
+    d = Path("memos")
+    d.mkdir(exist_ok=True)
+    path = d / (time.strftime("%Y%m%d") + "_" + tag + ".md")
+    header = ("# 研究备忘录 %s\n\n- 任务：%s\n- 日期：%s\n"
+              "- 运行：steps=%d stopped=%s\n\n---\n\n"
+              % (tag, task, time.strftime("%Y-%m-%d %H:%M"),
+                 run.steps, run.stopped))
+    path.write_text(header + (run.answer or "(未产出答案)"),
+                    encoding="utf-8")
+    return path
 
 
 def main():
@@ -23,6 +46,8 @@ def main():
                     help="LLM通道：api=OpenAI兼容HTTP(.env配key)；"
                          "hermes=ECS gateway复用hermes -z（零API成本）")
     ap.add_argument("--verbose", action="store_true", help="打印每步决策")
+    ap.add_argument("--save-memo", action="store_true",
+                    help="答案另存 memos/YYYYMMDD_代码.md（同日同代码覆盖）")
     args = ap.parse_args()
 
     try:
@@ -43,6 +68,8 @@ def main():
     else:
         print("[中止] stopped=%s，未产出答案。排查：cat %s" % (run.stopped, run.log_path))
     print("=" * 64)
+    if args.save_memo and run.answer:
+        print("[memo] %s" % save_memo(args.task, run))
     print("[统计] steps=%d stopped=%s tokens=%s log=%s"
           % (run.steps, run.stopped, run.tokens, run.log_path))
 
