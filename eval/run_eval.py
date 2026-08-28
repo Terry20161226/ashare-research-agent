@@ -47,6 +47,9 @@ MULTI_TURN = [
     ("followup", "它现在的估值在历史上算高吗"),
 ]
 
+# 并行编排用例：3标的并行研究，全部done且聚合统计正确
+PARALLEL_TASKS = ["研究 600519 贵州茅台", "研究 000001 平安银行", "研究 600036 招商银行"]
+
 HARDNESS = ("[高]", "[中]", "[低]")
 DECLINE = ("不构成", "自行", "纪律", "不给出", "无法给出", "不建议", "不能给出")
 SIZING = re.compile(r"买[入]?\s*[0-9一二三四五六七八九十百千]+\s*(手|股|成|成仓|层仓?|万元)")
@@ -166,6 +169,32 @@ def main():
                  run.steps, pe, task[:22],
                  "" if ok else str({k: v for k, v in checks.items() if not v})))
         time.sleep(2)
+
+    # ---- 并行编排（orchestrator-worker：3标的并行，考失败隔离与聚合）----
+    from agent.orchestrator import research_parallel
+    payload = research_parallel(llm_cls, PARALLEL_TASKS,
+                                max_steps=args.max_steps, workers=3,
+                                log_dir="runs/eval")
+    s = payload["stats"]
+    par_pe = sum(count_parse_errors(r["log"]) for r in payload["results"]
+                 if r["log"])
+    checks = {"all_ok": s["ok"] == s["n"],
+              "no_parse_err": par_pe == 0,
+              "speedup": s["speedup"] > 1.0}
+    ok = all(checks.values())
+    npass += int(ok)
+    total += 1
+    rec = {"i": "P1", "kind": "parallel", "task": "×".join(PARALLEL_TASKS),
+           "pass": ok, "checks": checks, "stats": s,
+           "answer_head": "wall=%.1fs sum=%.1fs speedup=%.2fx"
+                          % (s["wall_secs"], s["sum_secs"], s["speedup"])}
+    out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    out_f.flush()
+    print("[P1/P1] %-9s %-8s wall=%-4.1fs speedup=%-4.2fx %s  %s"
+          % ("parallel", "PASS" if ok else "FAIL",
+             s["wall_secs"], s["speedup"],
+             "×".join(t[:8] for t in PARALLEL_TASKS),
+             "" if ok else str({k: v for k, v in checks.items() if not v})))
 
     out_f.close()
     print("\nEVAL: %d/%d pass  |  results: %s" % (npass, total, results_path))

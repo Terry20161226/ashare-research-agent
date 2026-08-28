@@ -79,6 +79,9 @@ python3 main.py "它的主力资金最近在流入还是流出" --session demo
 
 # 或进入交互 REPL
 python3 chat.py --session demo
+
+# 多标的并行研究（orchestrator-worker）：3个worker并行、失败隔离、聚合统计
+python3 research.py "研究 600519" "研究 000001 平安银行" "研究 600036 招商银行" --workers 3
 ```
 
 研究/问答两模式由任务措辞驱动，同一套循环与工具。回答中的观点会逐条标注硬度
@@ -120,9 +123,11 @@ python3 stats.py                   # 运行观测画像：done率/步数/parse�
 main.py               CLI 入口（--session 多轮续接 / --protocol 双协议 / --approve-write）
 chat.py               交互式多轮 REPL（/new /history /exit）
 stats.py              运行观测画像：done率/步数/parse率/上下文峰值/工具分布
+research.py           多标的并行研究CLI（orchestrator-worker）
 agent/
   loop.py             ★ 主循环：决策->执行->回灌->再决策（核心，先读这个）
-  memory.py           两层记忆：会话续接 + 跨会话研究备忘录检索
+  orchestrator.py     多agent并行编排：线程池worker派发/失败隔离/聚合统计
+  memory.py           两层记忆：会话续接 + 跨会话研究备忘录检索（代码精确+BM25混合）
   llm.py              OpenAI兼容客户端：双决策协议(prompt-JSON/原生function calling)
   llm_hermes.py       可选通道：本地hermes gateway复用（见"部署形态"）
   trunc.py            工具输出截断 adapter（防上下文裸灌）
@@ -186,6 +191,16 @@ memos/                研究备忘录归档（--save-memo，跨会话检索源�
   OpenAI function calling schema——`--protocol json` 走 prompt-JSON
   （带四层解析兜底），`--protocol fc` 走原生 function calling（finish
   伪工具承载 done 信号）。两种协议共用同一套循环、熔断与评估集。
+- **多 agent 编排（线程池级，如实定位）**：`orchestrator.py` 用
+  ThreadPoolExecutor 并行派发 worker（每个 worker 是完整 Agent 实例，
+  复用全部熔断/逐出/写门），失败隔离（worker 异常转为结果不炸池）。
+  两条实战教训：worker 内 sleep 重试必须关闭（一个故障 worker 在池里
+  睡 6 秒会拖垮全体——`retry_sleep=0`）；LLM 是 IO 等待，GIL 不构成
+  并行瓶颈。什么值得拆多 agent：任务天然可分（多标的）+ 串行等待长。
+- **混合检索**：备忘录检索代码精确匹配优先（确定性），无代码锚点时
+  BM25 语义兜底（零依赖：bigram 分词+标准公式）。召回阈值 2.0 是按
+  真实库分数分布校准的（真命中最低 2.98/误召回最高 1.82）——
+  `eval/bm25_compare.py` 对照实验：代码精确 4/7、BM25 7/7、混合 7/7。
 - **jsonl 运行日志**：每步 decision/tool_result/parse_error/final 落盘
   `runs/`，排障先看日志再猜原因；`stats.py` 从日志聚合运行画像
   （done率/步数/parse率/上下文峰值/工具分布）。
@@ -205,26 +220,30 @@ memos/                研究备忘录归档（--save-memo，跨会话检索源�
 
 ```bash
 python3 tests/test_parser.py       # 离线：解析器五种脏输出形态（CI自动跑）
-python3 eval/run_eval.py --llm hermes   # 全链路：12用例×规则评分（需LLM通道）
+python3 eval/run_eval.py --llm hermes   # 全链路：13用例×规则评分（需LLM通道）
 ```
 
-评估集覆盖五类任务：研究（3）、问句（3）、红线（1，要求拒绝仓位指令）、
+评估集覆盖六类任务：研究（3）、问句（3）、红线（1，要求拒绝仓位指令）、
 边界（3，坏代码/不存在代码/无代码任务）、多轮对话（2，第二轮用指代词
-"它"考上下文续接与指代消解）。评分项：正常收尾、零 parse_error、
-输出纪律（数据截至行、硬度标注、拒绝买入指令、指代锚定标的）。
-结果落盘 `eval/results_*.jsonl`。
+"它"考上下文续接与指代消解）、并行编排（1，3标的并行，考失败隔离与
+加速比）。评分项：正常收尾、零 parse_error、输出纪律（数据截至行、
+硬度标注、拒绝买入指令、指代锚定标的）。结果落盘 `eval/results_*.jsonl`。
 
-## 实测成绩（2026-08-26）
+## 实测成绩（2026-08-26/28）
 
-- 评估集：10 单轮用例两战全 PASS 零 parse_error；多轮用例首跑暴露指代
-  可读性缺陷（数据锚定正确但答案未点名标的），prompt 修复后重验通过
-  ——评估集抓真问题，修复有前后对照
+- 评估集 13 用例（10 单轮 + 2 多轮 + 1 并行编排）**13/13 全 PASS**，全程零
+  parse_error；历次评估暴露过的真问题（指代可读性、尾部闭合括号错乱）
+  均有前后对照——评估集抓真问题，修复可复验
+- **多 agent 并行实测**：3 标的并行研究 wall=253.8s、加速比 1.91x
+  （串行合计约 485s）；worker 失败隔离经 mock 验证（4 worker 1 崩 3 活）
 - 多轮对话实战："研究 000001" → 追问"**它的**主力资金最近在流入还是流出"
   （任务零代码）：指代正确消解；资金流仅 1 日直测数据时用量价结构做
   [中] 级间接推断并如实标注——诚实纪律在多轮场景成立
 - 上下文管理：16 步任务终局 36K→7K 字符（-80%），K线工具 3000→821
   字符；真实运行上下文峰值 2.5K~4.7K
-- 生产连续运行 10+ 次全部正常收尾（4~9 步完成），部署形态：ECS + cron
+- 混合检索对照实验（7 查询）：代码精确 4/7、BM25 7/7、混合 7/7，
+  召回阈值按真实库分数分布校准
+- 生产连续运行 20+ 次全部正常收尾（4~9 步完成），部署形态：ECS + cron
   每交易日 16:30 多任务研究 + 飞书群投递 + 研究队列联动 + 备忘录归档
 - 值得记录的涌现行为：任务"研究一下今天的大盘"（无指数工具）——agent
   自行发现指数代码（如 399001）能穿过行情工具查询，自主完成大盘研究
