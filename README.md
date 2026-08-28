@@ -1,12 +1,64 @@
 # A股研究员 Agent
 
 [![CI](https://github.com/Terry20161226/ashare-research-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Terry20161226/ashare-research-agent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+**[English]** A zero-framework A-share research agent: an LLM in a bare-metal loop that autonomously decides which tool to call next, with a four-tier circuit breaker, a context-budget discipline (summarize → evict → account), two-layer memory (session + research memos), and a 12-case eval suite. 200-line core loop, production-deployed, zero API cost (Hermes gateway).
 
 一个零框架、从零手写的 A 股个股研究智能体。**LLM 在循环里，自主决定下一步调哪个工具**：
 给它一个任务或问题，它自己完成"取数 → 分析 → 成稿"，全程只引用工具返回的真实数据。
 
 主循环约 200 行（`agent/loop.py`），刻意保持能一口气读完——这个项目同时也是
 "Agent 到底是什么"的最小实现样本：Agent = LLM + 工具 + 循环 + 熔断，其余都是工程。
+
+## 真实产出（先看证据再读代码）
+
+| 模式 | 任务 | 产出 |
+|---|---|---|
+| 走势问答 | "分析下 002017 后续最有可能的走势" | [→ examples/question-002017-trend.md](examples/question-002017-trend.md) |
+| 多轮指代 | "研究 000001" → 追问"**它的**主力资金流入还是流出" | [→ examples/multi-turn-pingan.md](examples/multi-turn-pingan.md) |
+| 生产流水线 | 每日 16:30 cron 自动研究队列 top3 候选 | [→ examples/research-600362-production.md](examples/research-600362-production.md) |
+
+## 架构
+
+```mermaid
+flowchart TB
+    subgraph User["用户 / cron / REPL"]
+        T[任务或问题]
+    end
+
+    subgraph Core["agent/ 核心（~200行主循环）"]
+        L[loop.py<br/>决策→执行→回灌]
+        C[上下文治理<br/>摘要化/逐出/记账]
+        P[prompts/researcher.txt<br/>system prompt]
+    end
+
+    subgraph Tools["tools/ 只读数据工具"]
+        Q[quote 行情]
+        K[kline K线统计摘要]
+        F[fflow 资金流+自累积缓存]
+        FN[finance 财务摘要]
+    end
+
+    subgraph Mem["记忆与日志"]
+        S[sessions/ 会话历史]
+        M[memos/ 研究备忘录]
+        R[runs/ jsonl日志]
+    end
+
+    subgraph Gates["回归闸门"]
+        T1[tests/ 四套件]
+        T2[eval/ 12用例评分]
+    end
+
+    T --> L
+    L -->|每步决策JSON| Tools
+    Tools -->|消化后数据+截断| C
+    C --> L
+    L --> Mem
+    L --> Gates
+    P --> L
+```
 
 ## 能做什么
 
@@ -56,7 +108,7 @@ python3 tests/test_tools.py        # 四个数据工具直连真实接口+错误
 
 注：数据源为腾讯/东财国内端点，运行环境需能访问国内网络；Python 3.9+（在 3.11/3.12 验证）。
 
-## 架构
+## 代码目录
 
 ```
 main.py               CLI 入口（--session 多轮续接）
