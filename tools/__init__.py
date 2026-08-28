@@ -8,9 +8,10 @@
   绝不裸抛异常（裸抛=LLM看不到错误=开始编造）。
 - limit: 该工具结果进入上下文前的截断上限（字符）。
 """
+import inspect
 import traceback
 
-from tools import fflow, finance, kline, quote
+from tools import fflow, finance, kline, quote, watchlist
 
 TOOL_SPECS = {
     "get_quote": {
@@ -44,7 +45,52 @@ TOOL_SPECS = {
         "args": {"code": "股票代码"},
         "limit": 1200,
     },
+    "save_watchlist": {
+        "func": watchlist.save_watchlist,
+        "write": True,  # 写操作：默认被审批门拦截，须运行方显式授权
+        "desc": "把标的加入观察清单（写操作，落盘 watchlist.json）。"
+                "仅当用户明确要求「加入观察/标记关注」时调用。",
+        "args": {"code": "股票代码"},
+        "optional_args": {"reason": "加入理由，一句话"},
+        "limit": 600,
+    },
 }
+
+
+def is_write_tool(name):
+    """该工具是否为写操作（须过人工审批门）。"""
+    return bool(TOOL_SPECS.get(name, {}).get("write"))
+
+
+def openai_tools():
+    """从注册表导出 OpenAI function calling 的 tools schema（单一事实源：
+    同一份注册表既渲染 prompt 文本，也生成原生 function calling 的 schema）。
+    参数类型由函数签名的类型注解推导。"""
+    _TYPE_MAP = {str: "string", int: "integer", float: "number", bool: "boolean"}
+    out = []
+    for name, spec in TOOL_SPECS.items():
+        params = dict(spec["args"], **spec.get("optional_args", {}))
+        sig = inspect.signature(spec["func"])
+        properties, required = {}, []
+        for pname, desc in params.items():
+            anno = sig.parameters[pname].annotation if pname in sig.parameters else str
+            properties[pname] = {
+                "type": _TYPE_MAP.get(anno if anno is not inspect.Parameter.empty
+                                      else str, "string"),
+                "description": desc,
+            }
+            if pname in spec["args"]:
+                required.append(pname)
+        out.append({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": spec["desc"],
+                "parameters": {"type": "object", "properties": properties,
+                               "required": required},
+            },
+        })
+    return out
 
 
 def execute(name, args):

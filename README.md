@@ -105,9 +105,11 @@ python3 main.py "研究 600519" --verbose
 
 ```bash
 python3 tests/test_parser.py       # 解析器五种脏输出形态（纯离线，CI也跑）
-python3 tests/test_plumbing.py     # mock全链路9条断言：决策/熔断/逐出/日志
+python3 tests/test_plumbing.py     # mock全链路10条断言：决策/熔断/逐出/写门/日志
 python3 tests/test_memory.py       # 记忆层：会话回环/备忘录检索/注入（离线）
-python3 tests/test_tools.py        # 四个数据工具直连真实接口+错误路径
+python3 tests/test_fc.py           # function calling协议转换+schema导出（离线）
+python3 tests/test_tools.py        # 五个工具直连真实接口+错误路径
+python3 stats.py                   # 运行观测画像：done率/步数/parse率/上下文峰值
 ```
 
 注：数据源为腾讯/东财国内端点，运行环境需能访问国内网络；Python 3.9+（在 3.11/3.12 验证）。
@@ -115,25 +117,27 @@ python3 tests/test_tools.py        # 四个数据工具直连真实接口+错误
 ## 代码目录
 
 ```
-main.py               CLI 入口（--session 多轮续接）
+main.py               CLI 入口（--session 多轮续接 / --protocol 双协议 / --approve-write）
 chat.py               交互式多轮 REPL（/new /history /exit）
+stats.py              运行观测画像：done率/步数/parse率/上下文峰值/工具分布
 agent/
   loop.py             ★ 主循环：决策->执行->回灌->再决策（核心，先读这个）
   memory.py           两层记忆：会话续接 + 跨会话研究备忘录检索
-  llm.py              OpenAI兼容客户端：JSON模式降级/重试/token记账/宽容JSON解析
+  llm.py              OpenAI兼容客户端：双决策协议(prompt-JSON/原生function calling)
   llm_hermes.py       可选通道：本地hermes gateway复用（见"部署形态"）
   trunc.py            工具输出截断 adapter（防上下文裸灌）
   config.py           .env 加载
 tools/
-  __init__.py         ★ 工具注册表：描述即提示词、错误结构化返回
+  __init__.py         ★ 工具注册表：描述即提示词、错误结构化返回、schema导出
   quote.py            腾讯实时行情（GBK编码）
   kline.py            腾讯日K线（统计摘要化：区间统计+近10日明细+量比）
   fflow.py            东财主力资金流（push2→push2his→push2delay 回退链
                       + stockdata/ 自累积缓存：接口间歇性只回当日时历史靠每日运行累积）
   finance.py          东财财务摘要（datacenter，最近4个报告期）
+  watchlist.py        观察清单（全项目唯一写工具，演示人工审批门）
 prompts/
   researcher.txt      system prompt（落文件；{{TOOLS}} 由注册表自动注入）
-tests/                工具实测 + mock 全链路 + 记忆层（不需要 API key）
+tests/                工具实测 + mock 全链路 + 记忆层 + FC协议（不需要 API key）
 eval/                 评估集：12用例规则化评分（改提示词前后必跑）
 deploy/               可选部署样例（ECS + 飞书投递 + 研究队列联动）
 runs/                 运行日志：真实任务在 runs/，测试在 runs/tests/，评估在 runs/eval/
@@ -175,8 +179,16 @@ memos/                研究备忘录归档（--save-memo，跨会话检索源�
   "只有一天数据"包装成"趋势"。
 - **prompt_hash**：每次运行把 system prompt 的 md5 指纹写进日志头部——
   行为突变时先对 hash，再查是谁改了提示词或工具描述。
+- **写操作人工审批门**：工具注册表标记 `write=True` 的写工具默认被拦截
+  （cron/CI 等无人值守场景天然只读），显式 `--approve-write` 才放行；
+  拦截信息写给 LLM 看，它继续只读完成任务并在回答中如实注明。
+- **双决策协议**：同一注册表单一事实源，既渲染 prompt 文本也导出
+  OpenAI function calling schema——`--protocol json` 走 prompt-JSON
+  （带四层解析兜底），`--protocol fc` 走原生 function calling（finish
+  伪工具承载 done 信号）。两种协议共用同一套循环、熔断与评估集。
 - **jsonl 运行日志**：每步 decision/tool_result/parse_error/final 落盘
-  `runs/`，排障先看日志再猜原因。
+  `runs/`，排障先看日志再猜原因；`stats.py` 从日志聚合运行画像
+  （done率/步数/parse率/上下文峰值/工具分布）。
 
 ## 如何加一个新工具
 

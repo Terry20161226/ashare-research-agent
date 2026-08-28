@@ -48,22 +48,29 @@ def main():
     ap.add_argument("--llm", choices=["api", "hermes"], default="api",
                     help="LLM通道：api=OpenAI兼容HTTP(.env配key)；"
                          "hermes=ECS gateway复用hermes -z（零API成本）")
+    ap.add_argument("--protocol", choices=["json", "fc"], default="json",
+                    help="决策协议：json=prompt-JSON（默认，含解析兜底）；"
+                         "fc=原生function calling（仅api通道有效）")
     ap.add_argument("--verbose", action="store_true", help="打印每步决策")
     ap.add_argument("--save-memo", action="store_true",
                     help="答案另存 memos/YYYYMMDD_代码.md（同日同代码覆盖）")
+    ap.add_argument("--approve-write", action="store_true",
+                    help="人工授权：允许执行写工具（save_watchlist等）。"
+                         "默认拒绝——cron/CI等无人值守场景天然只读")
     ap.add_argument("--session", metavar="ID",
                     help="会话id：自动注入同会话历史+标的历史备忘录作上下文，"
                          "本轮Q/A追加到 sessions/<ID>.jsonl（跨会话记忆）")
     args = ap.parse_args()
 
     try:
-        llm = HermesLLM() if args.llm == "hermes" else LLMClient()
+        llm = HermesLLM() if args.llm == "hermes" else LLMClient(protocol=args.protocol)
     except RuntimeError as e:
         print("[启动失败] %s" % e)
         raise SystemExit(1)
     print("[model] %s  [llm] %s  [max_steps] %d"
           % (llm.model, args.llm, args.max_steps))
-    agent = Agent(llm=llm, max_steps=args.max_steps, verbose=args.verbose)
+    agent = Agent(llm=llm, max_steps=args.max_steps, verbose=args.verbose,
+                  allow_write=args.approve_write)
     print("[prompt_hash] %s\n" % agent.prompt_hash)
 
     context = memory.build_context(args.session, args.task) if args.session else None

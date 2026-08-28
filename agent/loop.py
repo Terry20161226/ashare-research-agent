@@ -17,7 +17,7 @@ from pathlib import Path
 
 from agent.llm import DecisionParseError, LLMClient
 from agent.trunc import truncate
-from tools import TOOL_SPECS, execute, tool_prompt
+from tools import TOOL_SPECS, execute, is_write_tool, tool_prompt
 
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "researcher.txt"
 
@@ -80,12 +80,14 @@ def _evict_old_tool_results(messages, keep=3):
 
 
 class Agent:
-    def __init__(self, llm=None, max_steps=15, verbose=False, evict_keep=3):
+    def __init__(self, llm=None, max_steps=15, verbose=False, evict_keep=3,
+                 allow_write=False):
         self.llm = llm or LLMClient()
         self.max_steps = max_steps
         self.verbose = verbose
         self.retry_sleep = 3  # LLM通道故障重试间隔（测试置0）
         self.evict_keep = evict_keep  # 工具结果原文保留最近N条，更早的折叠为桩
+        self.allow_write = allow_write  # 写工具授权（人工审批门，默认拒绝）
         self._system = self._build_system()
         # prompt版本指纹：行为突变时先对hash，再查是谁改了提示词
         self.prompt_hash = hashlib.md5(self._system.encode()).hexdigest()[:10]
@@ -162,8 +164,16 @@ class Agent:
             args = action.get("args") if isinstance(action.get("args"), dict) else {}
             messages.append({"role": "assistant",
                              "content": json.dumps(decision, ensure_ascii=False)})
-            result = truncate(execute(tool, args),
-                              TOOL_SPECS.get(tool, {}).get("limit", 2000))
+            # 写操作审批门：写工具默认拒绝（cron/CI等无人值守场景天然只读），
+            # 显式 --approve-write 才放行；拦截信息写给LLM看，它应继续只读完成
+            if is_write_tool(tool) and not self.allow_write:
+                result = ("写操作被拦截：工具 %s 需要运行方显式授权（--approve-write）"
+                          "才能执行。请基于已有只读数据继续完成任务，并在最终回答中"
+                          "如实注明「写操作未执行：待人工授权」。" % tool)
+                log.write(step, "write_blocked", {"tool": tool, "args": args})
+            else:
+                result = truncate(execute(tool, args),
+                                  TOOL_SPECS.get(tool, {}).get("limit", 2000))
             messages.append({"role": "user",
                              "content": "[工具 %s 执行结果]\n%s" % (tool, result)})
             _evict_old_tool_results(messages, keep=self.evict_keep)

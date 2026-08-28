@@ -21,7 +21,7 @@ class DecisionParseError(Exception):
 
 
 class LLMClient:
-    def __init__(self):
+    def __init__(self, protocol="json"):
         cfg = get_config()
         if not cfg["api_key"]:
             raise RuntimeError(
@@ -31,6 +31,7 @@ class LLMClient:
         self.api_key = cfg["api_key"]
         self.model = cfg["model"]
         self.total_tokens = 0
+        self.protocol = protocol  # json=prompt-JSON协议 / fc=原生function calling
 
     def chat(self, messages, temperature=0.0, timeout=90):
         """返回模型文本输出。temperature=0：决策要确定性，不要创造性。"""
@@ -44,12 +45,26 @@ class LLMClient:
             "messages": messages,
             "temperature": temperature,
         }
+        if self.protocol == "fc":
+            # 原生function calling：tools schema由注册表导出（单一事实源），
+            # finish为协议级伪工具（done信号，不入数据工具注册表）
+            from tools import openai_tools
+            base_payload["tools"] = openai_tools() + [{
+                "type": "function",
+                "function": {
+                    "name": "finish",
+                    "description": "任务完成时调用，提交最终回答。",
+                    "parameters": {"type": "object",
+                                   "properties": {"answer": {"type": "string",
+                                                             "description": "最终回答全文"}},
+                                   "required": ["answer"]},
+                },
+            }]
+            base_payload["tool_choice"] = "auto"
         # 第一轮带JSON模式（DeepSeek/Qwen兼容模式都支持），
         # 供应商返回400时降级为普通模式再试
-        attempts = [
-            dict(base_payload, response_format={"type": "json_object"}),
-            base_payload,
-        ]
+        attempts = ([dict(base_payload, response_format={"type": "json_object"}),
+                     base_payload] if self.protocol == "json" else [base_payload])
         last_err = None
         for payload in attempts:
             for _ in range(2):  # 每种模式网络级重试1次
@@ -63,10 +78,34 @@ class LLMClient:
                     j = r.json()
                     self.total_tokens += (j.get("usage") or {}).get(
                         "total_tokens", 0)
+                    if self.protocol == "fc":
+                        return self._parse_fc(j)
                     return j["choices"][0]["message"]["content"]
                 except requests.RequestException as e:
                     last_err = e
         raise RuntimeError("LLM调用失败（已重试）: %s" % last_err)
+
+    def _parse_fc(self, resp):
+        """原生function calling响应 -> 决策JSON文本（走统一的宽容解析器）。"""
+        msg = resp["choices"][0]["message"]
+        calls = msg.get("tool_calls") or []
+        if not calls:
+            # 模型没调工具而直接输出文本：按文本兜底解析（可能含JSON）
+            return msg.get("content") or ""
+        fn = calls[0]["function"]
+        name = fn.get("name", "")
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        if name == "finish":
+            return json.dumps({"thought": "完成",
+                               "action": {"done": True,
+                                          "answer": args.get("answer", "")}},
+                              ensure_ascii=False)
+        return json.dumps({"thought": args.pop("_thought", "调用工具"),
+                           "action": {"tool": name, "args": args}},
+                          ensure_ascii=False)
 
     def decide(self, messages):
         """取模型输出并解析为决策 dict。返回 (决策对象, 原始输出)。"""

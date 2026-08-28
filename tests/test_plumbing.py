@@ -254,6 +254,44 @@ def test_eviction_size_effect():
     print("eviction_size_effect OK（16步终局 %d 字符，基线36175）" % total)
 
 
+def test_write_gate():
+    # 写操作审批门：默认拒绝（watchlist不落盘），allow_write=True 才放行
+    import tempfile
+    script = [
+        {"thought": "先研究", "action": {"tool": "get_quote",
+                                         "args": {"code": "600519"}}},
+        {"thought": "用户要求关注", "action": {"tool": "save_watchlist",
+                                               "args": {"code": "600519",
+                                                        "reason": "龙头"}}},
+        {"thought": "完成", "action": {"done": True, "answer": "DONE"}},
+    ]
+    with tempfile.TemporaryDirectory() as td:
+        import tools.watchlist as wl
+        orig = wl.WATCHLIST
+        wl.WATCHLIST = Path(td) / "watchlist.json"
+        try:
+            mock = MockLLM(script)
+            agent = Agent(llm=mock, max_steps=10)  # 默认 allow_write=False
+            run = agent.run("研究600519并加入观察清单", log_dir="runs/tests")
+            assert run.stopped == "done"
+            assert not wl.WATCHLIST.exists(), "未授权时写工具不得落盘"
+            blocked = [m for m in mock.messages_seen
+                       if m["role"] == "user" and "写操作被拦截" in m["content"]]
+            assert blocked, "应有拦截信息回灌给LLM"
+            log_text = Path(run.log_path).read_text(encoding="utf-8")
+            assert '"type": "write_blocked"' in log_text
+
+            mock2 = MockLLM(script)
+            agent2 = Agent(llm=mock2, max_steps=10, allow_write=True)
+            run2 = agent2.run("研究600519并加入观察清单", log_dir="runs/tests")
+            assert run2.stopped == "done"
+            assert wl.WATCHLIST.exists(), "授权后写工具应落盘"
+            assert "600519" in wl.WATCHLIST.read_text(encoding="utf-8")
+        finally:
+            wl.WATCHLIST = orig
+    print("write_gate OK（默认拦截+授权放行+日志write_blocked）")
+
+
 if __name__ == "__main__":
     test_happy_path()
     test_max_steps_forced_final()
@@ -264,4 +302,5 @@ if __name__ == "__main__":
     test_llm_error_circuit_breaker()
     test_eviction()
     test_eviction_size_effect()
+    test_write_gate()
     print("PLUMBING OK")

@@ -16,6 +16,9 @@ jobs:
       - run: pip install requests
       - name: 编译检查
         run: |
-          python -m py_compile main.py agent/*.py tools/*.py tests/*.py eval/*.py deploy/*.py
-      - name: 解析器回归（离线，无需LLM/网络）
-        run: python tests/test_parser.py
+          python -m py_compile main.py chat.py stats.py agent/*.py tools/*.py tests/*.py eval/*.py deploy/*.py
+      - name: 离线回归（解析器/记忆层/FC协议/schema导出，无需LLM/网络）
+        run: |
+          python tests/test_parser.py
+          python tests/test_memory.py
+          python tests/test_fc.py
