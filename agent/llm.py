@@ -201,4 +201,15 @@ def parse_decision_json(raw):
     obj = _autoclose_loads(frag)
     if obj is not None:
         return obj
+    # 形态6：尾部闭合段混入多余的 ]（生产事故："}]} 应为 "}}}）——
+    # 窄域纠正：删除最末引号之后闭合段中的 ]（不碰内容、不增减深度）
+    m2 = re.search(r'("[\]\}]+)$', frag)
+    if m2 and "]" in m2.group(1):
+        fixed = frag[:m2.start(1)] + m2.group(1).replace("]", "")
+        try:
+            obj = json.loads(fixed, strict=False)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
     raise DecisionParseError(raw)

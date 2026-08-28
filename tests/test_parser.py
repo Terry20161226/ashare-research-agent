@@ -39,7 +39,14 @@ def test_dirty_outputs():
     # 正常输入不受影响
     obj = parse_decision_json('{"thought": "t", "action": {"tool": "get_quote", "args": {"code": "000001"}}}')
     assert obj["action"]["args"]["code"] == "000001"
-    print("dirty_outputs OK（换行/回声/围栏三种脏形态全兜住）")
+
+    # 形态6：尾部闭合括号类型错乱（} 写成 ]）——窄域纠正恢复
+    raw6 = ('{"thought": "成稿", "action": {"done": true, '
+            '"answer": "完整内容。数据截至2026-08-28。"}]}')
+    obj = parse_decision_json(raw6)
+    assert obj["action"]["done"] is True
+    assert "数据截至" in obj["action"]["answer"]
+    print("dirty_outputs OK（六种脏形态全兜住）")
 
 
 def test_missing_braces():

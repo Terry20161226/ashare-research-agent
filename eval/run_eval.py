@@ -138,6 +138,9 @@ def main():
     # ---- 多轮对话（session续接：第二轮靠上下文解析"它"的指代）----
     from agent import memory
     sid = "eval_multi"
+    # 会话隔离：每次评估重置该会话，避免历史污染影响多轮用例
+    if memory.session_path(sid).exists():
+        memory.session_path(sid).unlink()
     for i, (kind, task) in enumerate(MULTI_TURN):
         llm = llm_cls()
         agent = Agent(llm=llm, max_steps=args.max_steps)

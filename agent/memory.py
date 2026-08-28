@@ -64,7 +64,11 @@ def append_session(sid, task, answer, meta=None):
 
 
 def render_history(sid):
-    """把会话历史渲染成上下文块。无历史返回空串。"""
+    """把会话历史渲染成上下文块。无历史返回空串。
+
+    含显式【指代锚点】：从最近历史轮提取标的代码注入——指代消解
+    靠系统注入保证（确定性），不只靠 prompt 规则（概率性）。
+    """
     turns = load_session(sid)
     if not turns:
         return ""
@@ -76,6 +80,13 @@ def render_history(sid):
         lines.append("用户：%s" % t["task"])
         lines.append("助手：%s" % ans)
         lines.append("")
+    # 指代锚点：最近一轮出现的6位代码（指代词"它/该股"应解析为此标的）
+    for t in reversed(turns[-MAX_TURNS:]):
+        codes = _extract_codes(t["task"]) or _extract_codes(t["answer"][:200])
+        if codes:
+            lines.append("【指代锚点】本会话最近研究的标的：%s（指代词应解析为它，"
+                         "回答开头须点明）" % codes[0])
+            break
     return "\n".join(lines).strip()
 
 
