@@ -19,6 +19,10 @@
 | 多轮指代 | "研究 000001" → 追问"**它的**主力资金流入还是流出" | [→ examples/multi-turn-pingan.md](examples/multi-turn-pingan.md) |
 | 生产流水线 | 每日 16:30 cron 自动研究队列 top3 候选 | [→ examples/research-600362-production.md](examples/research-600362-production.md) |
 
+生产事故的完整复盘（现象/根因/修复/回归断言）见 [docs/incidents.md](docs/incidents.md)
+——LLM JSON 四种脏形态、日志文件碰撞、上下文膨胀、多轮指代可读性缺陷，
+每一条都有 `runs/*.jsonl` 或评估结果可查。
+
 ## 架构
 
 ```mermaid
