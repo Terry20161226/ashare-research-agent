@@ -3,7 +3,7 @@
 [![CI](https://github.com/Terry20161226/ashare-research-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Terry20161226/ashare-research-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**[English]** A zero-framework A-share research agent: an LLM in a bare-metal loop that autonomously decides which tool to call next, with a four-tier circuit breaker, a context-budget discipline (summarize → evict → account), two-layer memory (session + research memos), and a 12-case eval suite. 200-line core loop, production-deployed, zero API cost (Hermes gateway).
+**[English]** A zero-framework A-share research agent: an LLM in a bare-metal loop that autonomously decides which tool to call next — four-tier circuit breaker, context budget (summarize → evict → account), two-layer memory (session + memos, code-exact + BM25 hybrid retrieval), dual decision protocols (prompt-JSON / native function calling), write-tool approval gate, multi-agent orchestration (measured 1.91x speedup), and a 13-case eval suite. 200-line core loop, production-deployed, zero API cost (Hermes gateway).
 
 一个零框架、从零手写的 A 股个股研究智能体。**LLM 在循环里，自主决定下一步调哪个工具**：
 给它一个任务或问题，它自己完成"取数 → 分析 → 成稿"，全程只引用工具返回的真实数据。
@@ -20,7 +20,7 @@
 | 生产流水线 | 每日 16:30 cron 自动研究队列 top3 候选 | [→ examples/research-600362-production.md](examples/research-600362-production.md) |
 
 生产事故的完整复盘（现象/根因/修复/回归断言）见 [docs/incidents.md](docs/incidents.md)
-——LLM JSON 四种脏形态、日志文件碰撞、上下文膨胀、多轮指代可读性缺陷，
+——LLM JSON 脏形态、日志文件碰撞、上下文膨胀、多轮指代可读性缺陷，
 每一条都有 `runs/*.jsonl` 或评估结果可查。
 
 ## 架构
@@ -32,30 +32,37 @@ flowchart TB
     end
 
     subgraph Core["agent/ 核心（~200行主循环）"]
-        L[loop.py<br/>决策→执行→回灌]
+        L[loop.py<br/>决策→执行→回灌<br/>四重熔断+写门]
         C[上下文治理<br/>摘要化/逐出/记账]
         P[prompts/researcher.txt<br/>system prompt]
     end
 
-    subgraph Tools["tools/ 只读数据工具"]
+    subgraph Par["多agent编排"]
+        O[orchestrator.py<br/>线程池worker派发/失败隔离]
+    end
+
+    subgraph Tools["tools/ 数据工具"]
         Q[quote 行情]
         K[kline K线统计摘要]
         F[fflow 资金流+自累积缓存]
         FN[finance 财务摘要]
+        W[watchlist 写工具<br/>默认拦截待授权]
     end
 
-    subgraph Mem["记忆与日志"]
+    subgraph Mem["记忆与日志（代码精确+BM25混合检索）"]
         S[sessions/ 会话历史]
         M[memos/ 研究备忘录]
         R[runs/ jsonl日志]
     end
 
     subgraph Gates["回归闸门"]
-        T1[tests/ 四套件]
-        T2[eval/ 12用例评分]
+        T1[tests/ 六套件24用例]
+        T2[eval/ 13用例评分]
     end
 
     T --> L
+    T --> O
+    O -->|并行worker| L
     L -->|每步决策JSON| Tools
     Tools -->|消化后数据+截断| C
     C --> L
@@ -107,10 +114,11 @@ python3 main.py "研究 600519" --verbose
 真实循环 + 真实数据接口，零成本）：
 
 ```bash
-python3 tests/test_parser.py       # 解析器五种脏输出形态（纯离线，CI也跑）
-python3 tests/test_plumbing.py     # mock全链路10条断言：决策/熔断/逐出/写门/日志
-python3 tests/test_memory.py       # 记忆层：会话回环/备忘录检索/注入（离线）
+python3 tests/test_parser.py       # 解析器六种脏输出形态（纯离线，CI也跑）
+python3 tests/test_plumbing.py     # mock全链路11条断言：决策/熔断/逐出/写门/日志
+python3 tests/test_memory.py       # 记忆层：会话回环/混合检索/BM25兜底/注入（离线）
 python3 tests/test_fc.py           # function calling协议转换+schema导出（离线）
+python3 tests/test_orchestrator.py # 并行编排：并行度/失败隔离/慢worker（离线）
 python3 tests/test_tools.py        # 五个工具直连真实接口+错误路径
 python3 stats.py                   # 运行观测画像：done率/步数/parse率/上下文峰值
 ```
@@ -142,8 +150,10 @@ tools/
   watchlist.py        观察清单（全项目唯一写工具，演示人工审批门）
 prompts/
   researcher.txt      system prompt（落文件；{{TOOLS}} 由注册表自动注入）
-tests/                工具实测 + mock 全链路 + 记忆层 + FC协议（不需要 API key）
-eval/                 评估集：12用例规则化评分（改提示词前后必跑）
+tests/                六套件离线回归：解析器/管道/记忆/FC协议/编排/工具实测
+eval/                 评估集13用例评分 + BM25对照实验（改提示词前后必跑）
+docs/                 生产故障复盘（8个真实事故：现象/根因/修复/回归断言）
+examples/             真实运行产出样例（问答/多轮/生产流水线）
 deploy/               可选部署样例（ECS + 飞书投递 + 研究队列联动）
 runs/                 运行日志：真实任务在 runs/，测试在 runs/tests/，评估在 runs/eval/
 sessions/             会话记忆（每轮Q/A追加，跨进程续接）
@@ -173,11 +183,12 @@ memos/                研究备忘录归档（--save-memo，跨会话检索源�
 - **四重熔断**：步数硬顶 max_steps（默认15）→ 耗尽后一次 forced_final
   无工具收尾 → 连续3次 JSON 解析失败中止 → LLM通道故障预算内重试、
   连续3次熔断。agent 最贵的行为是「再试一次」。
-- **宽容 JSON 解析**：LLM 输出脏是常态，解析器四层兜住——剥 markdown 围栏
+- **宽容 JSON 解析**：LLM 输出脏是常态，解析器五层兜住——剥 markdown 围栏
   → 首个配平 JSON 对象（深度+字符串状态跟踪，丢弃尾部回声）→
   `json.loads(strict=False)`（容忍字符串内真实换行）→ 漏数嵌套右括号时
   自动补齐（仅当内容完整；字符串中途截断则不救，走重试路径，绝不产出
-  半截答案）。五种生产事故脏形态全部有回归断言。
+  半截答案）→ 尾部闭合段混入多余 `]` 时窄域删除。六种生产事故脏形态
+  全部有回归断言。
 - **数据源诚实标注**：东财资金流接口间歇性只返回当日——三级 host 回退链
   （push2→push2his→push2delay）之外，用本地自累积缓存补历史（每次运行
   并入当日行），输出末行标注数据来源。agent 引用时如实转述，不把
@@ -219,7 +230,7 @@ memos/                研究备忘录归档（--save-memo，跨会话检索源�
 "改提示词等于改代码"——这个仓库的回归闸门分两层：
 
 ```bash
-python3 tests/test_parser.py       # 离线：解析器五种脏输出形态（CI自动跑）
+python3 tests/test_parser.py       # 离线：解析器六种脏输出形态（CI自动跑）
 python3 eval/run_eval.py --llm hermes   # 全链路：13用例×规则评分（需LLM通道）
 ```
 
@@ -284,7 +295,8 @@ hermes cron create '30 16 * * 1-5' --name agent-research \
 
 1. 本 agent 只产出研究草稿与观点分析，**永不接入交易执行**——LLM 幻觉率
    不为零，涉钱环节永久人工确认。
-2. 工具只读公开行情数据，无任何写操作。
+2. 数据工具只读公开行情；唯一的写工具（观察清单）默认被审批门拦截，
+   显式授权才执行。
 3. 工具描述与 prompts 改动前先跑 `tests/`（改提示词等于改代码）。
 
 ## 非目标（现阶段）
