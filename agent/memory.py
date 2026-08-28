@@ -14,8 +14,10 @@
 渲染预算：历史轮数≤5、每轮answer≤800字；历史备忘录≤2份、每份≤600字。
 """
 import json
+import math
 import re
 import time
+from collections import Counter
 from pathlib import Path
 
 SESSIONS_DIR = Path("sessions")
@@ -96,25 +98,75 @@ def _extract_codes(text):
     return re.findall(r"\b\d{6}\b", text)
 
 
-def find_memos(task):
-    """检索任务代码对应的历史备忘录：[(日期, 内容头), ...] 最新在前。"""
-    codes = set(_extract_codes(task))
-    hits = []
-    if not codes or not MEMOS_DIR.exists():
-        return hits
-    for p in sorted(MEMOS_DIR.glob("*.md"), reverse=True):
+def _tokenize(text):
+    """零依赖中文分词：字符bigram + 6位代码/英文词单独成token。
+    '平安银行' -> ['平安','安银','银行']；比单字粒度保留更多语义。"""
+    tokens = re.findall(r"\b\d{6}\b|[A-Za-z][A-Za-z0-9_.]*", text)
+    cjk = re.sub(r"[^\u4e00-\u9fff]", "", text)
+    tokens += [cjk[i:i + 2] for i in range(len(cjk) - 1)]
+    return tokens
+
+
+def bm25_search(query, k=2, _k1=1.5, _b=0.75, min_score=2.0):
+    """BM25全文检索备忘录：[(date, tag, body, score)] 按分数降序。
+    语义兜底层——无代码锚点的查询（"白酒龙头估值"）也能召回相关备忘录。
+    min_score=2.0：按当前7份memos库校准（真命中最低2.98/误召回最高1.82），
+    库内容变化后须重跑 eval/bm25_compare.py 重新校准。"""
+    if not MEMOS_DIR.exists():
+        return []
+    docs = []
+    for p in MEMOS_DIR.glob("*.md"):
         m = re.match(r"(\d{8})_(\d{6}|misc)\.md", p.name)
         if not m:
             continue
-        date, tag = m.groups()
-        if tag in codes:
-            try:
-                body = p.read_text(encoding="utf-8")
-            except OSError:
+        try:
+            body = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        docs.append((m.group(1), m.group(2), body, Counter(_tokenize(body))))
+    if not docs:
+        return []
+    q_tokens = Counter(_tokenize(query))
+    N = len(docs)
+    avgdl = sum(sum(tf.values()) for _, _, _, tf in docs) / N
+    scores = []
+    for date, tag, body, tf in docs:
+        dl = sum(tf.values())
+        score = 0.0
+        for q in q_tokens:
+            n_q = sum(1 for _, _, _, t in docs if t.get(q, 0) > 0)
+            idf = math.log(1 + (N - n_q + 0.5) / (n_q + 0.5))
+            f = tf.get(q, 0)
+            score += idf * f * (_k1 + 1) / (f + _k1 * (1 - _b + _b * dl / max(avgdl, 1)))
+        if score >= min_score:
+            scores.append((date, tag, body, round(score, 3)))
+    scores.sort(key=lambda x: x[3], reverse=True)
+    return scores[:k]
+
+
+def find_memos(task):
+    """检索任务相关历史备忘录：[(日期, tag, body), ...] 最新在前。
+    混合检索：代码精确匹配优先（确定性），无代码锚点时BM25语义兜底。"""
+    hits = []
+    codes = set(_extract_codes(task))
+    if codes and MEMOS_DIR.exists():
+        for p in sorted(MEMOS_DIR.glob("*.md"), reverse=True):
+            m = re.match(r"(\d{8})_(\d{6}|misc)\.md", p.name)
+            if not m:
                 continue
+            date, tag = m.groups()
+            if tag in codes:
+                try:
+                    body = p.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                hits.append((date, tag, body))
+                if len(hits) >= MAX_MEMOS:
+                    break
+    if not hits:
+        # 语义兜底：无代码/代码未命中时走BM25全文检索
+        for date, tag, body, _ in bm25_search(task, k=MAX_MEMOS):
             hits.append((date, tag, body))
-            if len(hits) >= MAX_MEMOS:
-                break
     return hits
 
 

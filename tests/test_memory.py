@@ -68,6 +68,26 @@ def test_build_context():
     print("build_context OK（历史+备忘录混合渲染，预算受控 %d字）" % len(ctx))
 
 
+def test_bm25_semantic_fallback():
+    # BM25兜底：无代码锚点的语义查询也能召回相关备忘录
+    # fixture用贴近真实产出的内容（含行业语义，非仅代码）
+    (memory.MEMOS_DIR / "20260826_600362.md").write_text(
+        "# 研究备忘录 600362\n\n---\n\n江西铜业涨停，铜业周期量价齐升，超大单进攻。",
+        encoding="utf-8")
+    # 覆写600519备忘录为真实语义内容（白酒行业龙头）
+    (memory.MEMOS_DIR / "20260826_600519.md").write_text(
+        "# 研究备忘录 600519\n\n---\n\n贵州茅台，白酒行业绝对龙头，市盈率TTM 20倍，估值合理偏低。",
+        encoding="utf-8")
+    hits = memory.bm25_search("白酒龙头估值怎么样")
+    assert hits and hits[0][1] == "600519", hits
+    # 代码查询仍走精确匹配，BM25不抢戏
+    hits2 = memory.find_memos("研究 000001 平安银行")
+    assert hits2 and hits2[0][1] == "000001", hits2
+    # 完全无关的查询返回空（不误召回）
+    assert memory.bm25_search("量子计算机概念股") == []
+    print("bm25_semantic_fallback OK")
+
+
 def test_loop_context_injection():
     # 主循环context参数：注入内容须出现在LLM收到的首条user消息里
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -89,5 +109,6 @@ if __name__ == "__main__":
     test_session_roundtrip()
     test_memo_retrieval()
     test_build_context()
+    test_bm25_semantic_fallback()
     test_loop_context_injection()
     print("MEMORY OK")
